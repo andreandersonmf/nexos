@@ -1,86 +1,40 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
-import { ensureSeed, resetSeed } from '@/lib/nexos/seed-data';
-import { LlmChat, UserMessage } from 'emergentintegrations';
+import { ensureSeed } from '@/lib/nexos/seed-data';
+import { ApiError, getUsuarioDaSessao, requireAuth, cookieOptions, serializarCookie, COOKIE_SESSAO, garantirEstruturaUsuarios } from '@/lib/nexos/auth';
+import * as authHandler from '@/lib/nexos/handlers/auth';
+import * as usuariosHandler from '@/lib/nexos/handlers/usuarios';
+import * as alunosHandler from '@/lib/nexos/handlers/alunos';
+import * as turmasHandler from '@/lib/nexos/handlers/turmas';
+import * as professoresHandler from '@/lib/nexos/handlers/professores';
+import * as frequenciaHandler from '@/lib/nexos/handlers/frequencia';
+import * as desempenhoHandler from '@/lib/nexos/handlers/desempenho';
+import * as documentosHandler from '@/lib/nexos/handlers/documentos';
+import * as alertasHandler from '@/lib/nexos/handlers/alertas';
+import * as comunicadosHandler from '@/lib/nexos/handlers/comunicados';
+import * as relatoriosHandler from '@/lib/nexos/handlers/relatorios';
+import * as configuracoesHandler from '@/lib/nexos/handlers/configuracoes';
+import * as dashboardHandler from '@/lib/nexos/handlers/dashboard';
+import * as nexoIaHandler from '@/lib/nexos/handlers/nexo-ia-chat';
+import { resetSeed } from '@/lib/nexos/seed-data';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 function json(data, status = 200) {
   return NextResponse.json(data, { status });
 }
 
-// ============== HELPERS ==============
-async function computeAlunoMetrics(db) {
-  const [alunos, turmas, notas, frequencia] = await Promise.all([
-    db.collection('alunos').find({}).toArray(),
-    db.collection('turmas').find({}).toArray(),
-    db.collection('notas').find({}).toArray(),
-    db.collection('frequencia').find({}).toArray(),
-  ]);
-  const turmaMap = Object.fromEntries(turmas.map((t) => [t.id, t]));
-  const byAluno = {};
-  for (const a of alunos) {
-    const na = notas.filter((n) => n.matricula_aluno === a.matricula);
-    const fa = frequencia.filter((f) => f.matricula_aluno === a.matricula);
-    const media = na.length ? Math.round((na.reduce((s, n) => s + n.valor, 0) / na.length) * 10) / 10 : null;
-    const presentes = fa.filter((f) => f.presente).length;
-    const freqPct = fa.length ? Math.round((presentes / fa.length) * 100) : 0;
-    byAluno[a.matricula] = {
-      aluno: a,
-      turma: turmaMap[a.turma_id],
-      media,
-      freqPct,
-      totalNotas: na.length,
-      totalFaltas: fa.length - presentes,
-    };
+// Inicialização idempotente com cache por processo (evita rodar a cada request)
+let estruturaGarantida = 0;
+async function inicializar() {
+  await ensureSeed();
+  if (Date.now() - estruturaGarantida > 5 * 60 * 1000) {
+    try {
+      await garantirEstruturaUsuarios(await getDb());
+    } catch { /* estrutura opcional */ }
+    estruturaGarantida = Date.now();
   }
-  return { alunos, turmas, byAluno, turmaMap };
-}
-
-async function regenerarAlertas(db) {
-  // apagar alertas automaticos (todos no MVP)
-  await db.collection('alertas').deleteMany({});
-  const { byAluno } = await computeAlunoMetrics(db);
-  const novos = [];
-  let id = 1;
-  const now = new Date().toISOString();
-  for (const matricula of Object.keys(byAluno)) {
-    const m = byAluno[matricula];
-    // frequencia
-    if (m.freqPct > 0 && m.freqPct < 75) {
-      novos.push({
-        id: id++, matricula_aluno: matricula, tipo: 'frequencia', prioridade: 'alta',
-        descricao: `Frequência abaixo de 75% (${m.freqPct}%).`, data: now, status: 'aberto', auto: true,
-      });
-    } else if (m.freqPct > 0 && m.freqPct < 85) {
-      novos.push({
-        id: id++, matricula_aluno: matricula, tipo: 'frequencia', prioridade: 'media',
-        descricao: `Frequência em alerta (${m.freqPct}%).`, data: now, status: 'aberto', auto: true,
-      });
-    }
-    // desempenho
-    if (m.media != null && m.media < 5) {
-      novos.push({
-        id: id++, matricula_aluno: matricula, tipo: 'desempenho', prioridade: 'alta',
-        descricao: `Média geral baixa (${m.media.toFixed(1).replace('.', ',')}).`, data: now, status: 'aberto', auto: true,
-      });
-    } else if (m.media != null && m.media < 6) {
-      novos.push({
-        id: id++, matricula_aluno: matricula, tipo: 'desempenho', prioridade: 'media',
-        descricao: `Média abaixo de 6,0 (${m.media.toFixed(1).replace('.', ',')}).`, data: now, status: 'aberto', auto: true,
-      });
-    } else if (m.media != null && m.media < 7) {
-      novos.push({
-        id: id++, matricula_aluno: matricula, tipo: 'desempenho', prioridade: 'baixa',
-        descricao: `Nota média levemente abaixo do esperado (${m.media.toFixed(1).replace('.', ',')}).`, data: now, status: 'aberto', auto: true,
-      });
-    }
-  }
-  if (novos.length) await db.collection('alertas').insertMany(novos);
-  return { gerados: novos.length };
 }
 
 async function routeHandler(request, context) {
@@ -89,396 +43,196 @@ async function routeHandler(request, context) {
   const path = '/' + parts.join('/');
   const method = request.method;
   const url = new URL(request.url);
+  let db;
 
   try {
-    await ensureSeed();
-    const db = await getDb();
+    await inicializar();
+    db = await getDb();
 
     if (path === '/' || path === '' || path === '/health') {
-      return json({ ok: true, service: "Nexo's API", version: '0.2.0' });
+      return json({ ok: true, service: "Nexo's API", version: '1.0.0' });
     }
 
-    if (path === '/seed/reset' && method === 'POST') {
+    // ---------- AUTH (público) ----------
+    if (path === '/auth/login' && method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const { token, usuario } = await authHandler.login(db, request, body);
+      const res = json({ usuario });
+      res.headers.set('Set-Cookie', serializarCookie(COOKIE_SESSAO, token, cookieOptions(request)));
+      return res;
+    }
+
+    // ---------- Rotas protegidas ----------
+    const usuario = await getUsuarioDaSessao(db, request);
+    if (!usuario) throw new ApiError(401, 'Sessão inválida ou expirada. Faça login novamente.');
+
+    const is = (p, m) => path === p && method === m;
+
+    // AUTH
+    if (is('/auth/logout', 'POST')) {
+      const r = await authHandler.logout(db, request, usuario);
+      const res = json(r);
+      res.headers.set('Set-Cookie', serializarCookie(COOKIE_SESSAO, '', { ...cookieOptions(request), maxAge: 0 }));
+      return res;
+    }
+    if (is('/auth/me', 'GET')) return json(await authHandler.me(db, request, usuario));
+
+    // SEED (administrador apenas — operação destrutiva controlada)
+    if (is('/seed/reset', 'POST')) {
+      requireAuth(usuario);
+      if (usuario.perfil !== 'ADMIN') throw new ApiError(403, 'Apenas o administrador pode executar esta operação.');
       const r = await resetSeed();
       return json(r);
     }
 
-    // ---------- AUTH ----------
-    if (path === '/auth/login' && method === 'POST') {
-      const body = await request.json();
-      const { email, senha } = body || {};
-      if (!email || !senha) return json({ error: 'E-mail e senha são obrigatórios.' }, 400);
-      const user = await db.collection('usuarios').findOne({ email: email.toLowerCase().trim(), senha });
-      if (!user) return json({ error: 'Credenciais inválidas.' }, 401);
-      const { senha: _, _id, ...safe } = user;
-      return json({ user: safe });
+    // DASHBOARD
+    if (is('/dashboard', 'GET')) return json(await dashboardHandler.dashboard(db, usuario));
+
+    // USUÁRIOS
+    if (is('/usuarios', 'GET')) return json(await usuariosHandler.listarUsuarios(db, usuario));
+    if (is('/usuarios', 'POST')) return json(await usuariosHandler.criarUsuario(db, usuario, await request.json().catch(() => ({}))), 201);
+    if (path.startsWith('/usuarios/') && method === 'PATCH' && parts.length === 2) {
+      return json(await usuariosHandler.atualizarUsuario(db, usuario, parts[1], await request.json().catch(() => ({}))));
+    }
+    if (path.startsWith('/usuarios/') && method === 'POST' && parts.length === 3 && parts[2] === 'redefinir-senha') {
+      return json(await usuariosHandler.redefinirSenha(db, usuario, parts[1]));
     }
 
-    // ---------- DASHBOARD ----------
-    if (path === '/dashboard' && method === 'GET') {
-      const [totalAlunos, totalTurmas, totalProfessores, alertas, frequencia, atividades, alunos, turmas] = await Promise.all([
-        db.collection('alunos').countDocuments(),
-        db.collection('turmas').countDocuments(),
-        db.collection('usuarios').countDocuments({ perfil: 'PROFESSOR' }),
-        db.collection('alertas').find({ status: 'aberto' }).toArray(),
-        db.collection('frequencia').find({}).toArray(),
-        db.collection('atividades').find({}).sort({ data: -1 }).limit(5).toArray(),
-        db.collection('alunos').find({}).toArray(),
-        db.collection('turmas').find({}).toArray(),
-      ]);
-
-      const totalPresencas = frequencia.filter((f) => f.presente).length;
-      const freqMedia = frequencia.length > 0 ? Math.round((totalPresencas / frequencia.length) * 100) : 0;
-
-      const alunoTurma = Object.fromEntries(alunos.map((a) => [a.matricula, a.turma_id]));
-      const turmaNome = Object.fromEntries(turmas.map((t) => [t.id, t.nome]));
-      const porTurma = {};
-      for (const f of frequencia) {
-        const tid = alunoTurma[f.matricula_aluno];
-        if (!tid) continue;
-        if (!porTurma[tid]) porTurma[tid] = { total: 0, presentes: 0 };
-        porTurma[tid].total += 1;
-        if (f.presente) porTurma[tid].presentes += 1;
-      }
-      const frequenciaPorTurma = Object.entries(porTurma).map(([tid, v]) => ({
-        turma: turmaNome[tid] || tid,
-        percentual: v.total ? Math.round((v.presentes / v.total) * 100) : 0,
-      })).sort((a, b) => a.turma.localeCompare(b.turma));
-
-      const alunoMap = Object.fromEntries(alunos.map((a) => [a.matricula, a]));
-      const prioOrdem = { alta: 0, media: 1, baixa: 2 };
-      const alertasPrioritarios = alertas
-        .sort((a, b) => (prioOrdem[a.prioridade] ?? 3) - (prioOrdem[b.prioridade] ?? 3))
-        .slice(0, 5)
-        .map((al) => {
-          const a = alunoMap[al.matricula_aluno];
-          return { ...al, _id: undefined, aluno_nome: a?.nome, turma: turmaNome[a?.turma_id] };
-        });
-
-      return json({
-        metricas: {
-          alunos: totalAlunos, turmas: totalTurmas, professores: totalProfessores,
-          alertasAbertos: alertas.length, frequenciaMedia: freqMedia,
-        },
-        alertasPrioritarios,
-        atividadesRecentes: atividades.map(({ _id, ...a }) => a),
-        frequenciaPorTurma,
-      });
-    }
-
-    // ---------- ALUNOS LIST ----------
-    if (path === '/alunos' && method === 'GET') {
-      const q = (url.searchParams.get('q') || '').toLowerCase().trim();
-      const [alunos, turmas] = await Promise.all([
-        db.collection('alunos').find({}).toArray(),
-        db.collection('turmas').find({}).toArray(),
-      ]);
-      const turmaMap = Object.fromEntries(turmas.map((t) => [t.id, t.nome]));
-      let items = alunos.map((a) => ({
-        matricula: a.matricula, nome: a.nome,
-        turma: turmaMap[a.turma_id] || '—', status: a.status || 'ATIVO',
-      }));
-      if (q) {
-        items = items.filter((a) =>
-          a.nome.toLowerCase().includes(q) ||
-          a.matricula.toLowerCase().includes(q) ||
-          a.turma.toLowerCase().includes(q)
-        );
-      }
-      items.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
-      return json({ items });
-    }
-
-    // ---------- ALUNO DETAIL ----------
+    // ALUNOS
+    if (is('/alunos', 'GET')) return json(await alunosHandler.listarAlunos(db, usuario, url.searchParams));
+    if (is('/alunos', 'POST')) return json(await alunosHandler.criarAluno(db, usuario, await request.json().catch(() => ({}))), 201);
     if (path.startsWith('/alunos/') && method === 'GET' && parts.length === 2) {
-      const matricula = parts[1];
-      const aluno = await db.collection('alunos').findOne({ matricula });
-      if (!aluno) return json({ error: 'Aluno não encontrado.' }, 404);
-      const [turma, notas, frequencia, observacoes, responsaveis, disciplinas, alertas] = await Promise.all([
-        db.collection('turmas').findOne({ id: aluno.turma_id }),
-        db.collection('notas').find({ matricula_aluno: matricula }).toArray(),
-        db.collection('frequencia').find({ matricula_aluno: matricula }).toArray(),
-        db.collection('observacoes').find({ matricula_aluno: matricula }).sort({ data: -1 }).toArray(),
-        db.collection('responsaveis').find({ matricula_aluno: matricula }).toArray(),
-        db.collection('disciplinas').find({}).toArray(),
-        db.collection('alertas').find({ matricula_aluno: matricula, status: 'aberto' }).toArray(),
-      ]);
-
-      const totalPresencas = frequencia.filter((f) => f.presente).length;
-      const faltas = frequencia.length - totalPresencas;
-      const freqPercentual = frequencia.length > 0 ? Math.round((totalPresencas / frequencia.length) * 100) : 0;
-
-      const faltasPorMes = {};
-      const nomesMes = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-      for (const f of frequencia) {
-        if (f.presente) continue;
-        const d = new Date(f.data_aula);
-        const k = `${d.getFullYear()}-${d.getMonth()}`;
-        faltasPorMes[k] = (faltasPorMes[k] || 0) + 1;
-      }
-      const faltasChart = Object.entries(faltasPorMes)
-        .map(([k, v]) => {
-          const [y, m] = k.split('-');
-          return { mes: nomesMes[parseInt(m)], ano: parseInt(y), faltas: v, _sort: parseInt(y) * 12 + parseInt(m) };
-        })
-        .sort((a, b) => a._sort - b._sort).slice(-6)
-        .map(({ _sort, ...rest }) => rest);
-
-      const discMap = Object.fromEntries(disciplinas.map((d) => [d.id, d.nome]));
-      const notasPorDisc = {};
-      for (const n of notas) {
-        const nome = discMap[n.disciplina_id] || n.disciplina_nome;
-        if (!notasPorDisc[nome]) notasPorDisc[nome] = [];
-        notasPorDisc[nome].push(n);
-      }
-      const notasResumo = Object.entries(notasPorDisc).map(([disc, arr]) => ({
-        disciplina: disc,
-        media: Math.round((arr.reduce((s, n) => s + n.valor, 0) / arr.length) * 10) / 10,
-        bimestres: arr.sort((a, b) => a.bimestre - b.bimestre).map((n) => ({ bimestre: n.bimestre, valor: n.valor })),
-      }));
-
-      const bimestres = [...new Set(notas.map((n) => n.bimestre))].sort();
-      const historico = bimestres.map((bim) => {
-        const row = { bimestre: `${bim}º Bimestre` };
-        let soma = 0, qtd = 0;
-        for (const d of disciplinas) {
-          const n = notas.find((x) => x.bimestre === bim && x.disciplina_id === d.id);
-          row[d.nome] = n ? n.valor : null;
-          if (n) { soma += n.valor; qtd++; }
-        }
-        row['Média'] = qtd ? Math.round((soma / qtd) * 10) / 10 : null;
-        return row;
-      });
-
-      return json({
-        aluno: { ...aluno, _id: undefined, turma: turma?.nome },
-        responsaveis: responsaveis.map(({ _id, ...r }) => r),
-        notas: notasResumo,
-        historico,
-        frequencia: { percentual: freqPercentual, faltas, totalAulas: frequencia.length, chart: faltasChart },
-        observacoes: observacoes.map(({ _id, ...o }) => o),
-        alertas: alertas.map(({ _id, ...a }) => a),
-      });
+      return json(await alunosHandler.detalharAluno(db, usuario, parts[1]));
+    }
+    if (path.startsWith('/alunos/') && method === 'PUT' && parts.length === 2) {
+      return json(await alunosHandler.atualizarAluno(db, usuario, parts[1], await request.json().catch(() => ({}))));
     }
 
-    // ---------- TURMAS ----------
-    if (path === '/turmas' && method === 'GET') {
-      const [turmas, alunos] = await Promise.all([
-        db.collection('turmas').find({}).sort({ nome: 1 }).toArray(),
-        db.collection('alunos').find({}).toArray(),
-      ]);
-      const items = turmas.map((t) => ({
-        ...t, _id: undefined,
-        totalAlunos: alunos.filter((a) => a.turma_id === t.id).length,
-      }));
-      return json({ items });
-    }
-
+    // TURMAS
+    if (is('/turmas', 'GET')) return json(await turmasHandler.listarTurmas(db, usuario));
+    if (is('/turmas', 'POST')) return json(await turmasHandler.criarTurma(db, usuario, await request.json().catch(() => ({}))), 201);
     if (path.startsWith('/turmas/') && method === 'GET' && parts.length === 2) {
-      const tid = parseInt(parts[1]);
-      const turma = await db.collection('turmas').findOne({ id: tid });
-      if (!turma) return json({ error: 'Turma não encontrada.' }, 404);
-      const { byAluno } = await computeAlunoMetrics(db);
-      const alunosTurma = Object.values(byAluno).filter((m) => m.aluno.turma_id === tid);
-      const alertas = await db.collection('alertas').find({ status: 'aberto' }).toArray();
-      const alertasPorAluno = {};
-      for (const al of alertas) {
-        alertasPorAluno[al.matricula_aluno] = (alertasPorAluno[al.matricula_aluno] || 0) + 1;
-      }
-      const alunosList = alunosTurma.map(({ aluno, media, freqPct }) => ({
-        matricula: aluno.matricula, nome: aluno.nome, media, freqPct,
-        alertas: alertasPorAluno[aluno.matricula] || 0,
-      })).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
-      const medias = alunosList.filter((a) => a.media != null).map((a) => a.media);
-      const freqs = alunosList.map((a) => a.freqPct);
-      const metricas = {
-        totalAlunos: alunosList.length,
-        mediaGeral: medias.length ? Math.round((medias.reduce((s, v) => s + v, 0) / medias.length) * 10) / 10 : null,
-        freqMedia: freqs.length ? Math.round(freqs.reduce((s, v) => s + v, 0) / freqs.length) : 0,
-        totalAlertas: alunosList.reduce((s, a) => s + a.alertas, 0),
-      };
-      return json({ turma: { ...turma, _id: undefined }, alunos: alunosList, metricas });
+      return json(await turmasHandler.detalharTurma(db, usuario, parts[1]));
+    }
+    if (path.startsWith('/turmas/') && method === 'PATCH' && parts.length === 2) {
+      return json(await turmasHandler.atualizarTurma(db, usuario, parts[1], await request.json().catch(() => ({}))));
+    }
+    if (path.startsWith('/turmas/') && method === 'POST' && parts.length === 3 && parts[2] === 'professores') {
+      return json(await turmasHandler.gerenciarProfessoresTurma(db, usuario, parts[1], await request.json().catch(() => ({}))));
     }
 
-    // ---------- DISCIPLINAS ----------
-    if (path === '/disciplinas' && method === 'GET') {
-      const items = await db.collection('disciplinas').find({}).sort({ nome: 1 }).toArray();
-      return json({ items: items.map(({ _id, ...d }) => d) });
+    // PROFESSORES
+    if (is('/professores', 'GET')) return json(await professoresHandler.listarProfessores(db, usuario));
+    if (path.startsWith('/professores/') && method === 'GET' && parts.length === 2) {
+      return json(await professoresHandler.detalharProfessor(db, usuario, parts[1]));
     }
 
-    // ---------- NOTAS (list by filter) ----------
-    if (path === '/notas' && method === 'GET') {
-      const turma_id = parseInt(url.searchParams.get('turma_id'));
-      const disciplina_id = parseInt(url.searchParams.get('disciplina_id'));
-      const bimestre = parseInt(url.searchParams.get('bimestre'));
-      if (!turma_id || !disciplina_id || !bimestre) {
-        return json({ error: 'turma_id, disciplina_id e bimestre são obrigatórios.' }, 400);
-      }
-      const [alunos, notas, disciplina] = await Promise.all([
-        db.collection('alunos').find({ turma_id }).sort({ nome: 1 }).toArray(),
-        db.collection('notas').find({ disciplina_id, bimestre }).toArray(),
-        db.collection('disciplinas').findOne({ id: disciplina_id }),
-      ]);
-      const notaMap = Object.fromEntries(notas.map((n) => [n.matricula_aluno, n.valor]));
-      const items = alunos.map((a) => ({
-        matricula: a.matricula, nome: a.nome,
-        valor: notaMap[a.matricula] ?? null,
-      }));
-      return json({ items, disciplina: disciplina?.nome });
+    // MENSAGENS (chat interno)
+    if (is('/mensagens/conversas', 'GET')) return json(await professoresHandler.listarConversas(db, usuario));
+    if (is('/mensagens', 'POST')) return json(await professoresHandler.enviarMensagem(db, usuario, await request.json().catch(() => ({}))), 201);
+    if (path.startsWith('/mensagens/') && method === 'GET' && parts.length === 2) {
+      return json(await professoresHandler.historicoConversa(db, usuario, parts[1]));
     }
 
-    // ---------- NOTAS BATCH UPSERT ----------
-    if (path === '/notas/batch' && method === 'POST') {
-      const body = await request.json();
-      const { turma_id, disciplina_id, bimestre, notas } = body || {};
-      if (!turma_id || !disciplina_id || !bimestre || !Array.isArray(notas)) {
-        return json({ error: 'Payload inválido.' }, 400);
-      }
-      const disciplina = await db.collection('disciplinas').findOne({ id: parseInt(disciplina_id) });
-      let gravadas = 0, removidas = 0;
-      for (const n of notas) {
-        const matricula = n.matricula_aluno || n.matricula;
-        if (!matricula) continue;
-        const valor = n.valor;
-        const filter = { matricula_aluno: matricula, disciplina_id: parseInt(disciplina_id), bimestre: parseInt(bimestre) };
-        if (valor == null || valor === '' || isNaN(parseFloat(valor))) {
-          const r = await db.collection('notas').deleteMany(filter);
-          removidas += r.deletedCount;
-          continue;
-        }
-        const v = Math.max(0, Math.min(10, Math.round(parseFloat(valor) * 10) / 10));
-        await db.collection('notas').updateOne(filter, {
-          $set: {
-            ...filter, disciplina_nome: disciplina?.nome,
-            valor: v, data_lancamento: new Date().toISOString(),
-          },
-          $setOnInsert: { id: Date.now() + Math.floor(Math.random() * 1000) },
-        }, { upsert: true });
-        gravadas++;
-      }
-      // registrar atividade
-      await db.collection('atividades').insertOne({
-        id: Date.now(),
-        tipo: 'nota',
-        descricao: `Notas de ${disciplina?.nome || 'disciplina'} publicadas (bimestre ${bimestre}).`,
-        data: new Date().toISOString(),
-      });
-      // regenerar alertas automaticamente
-      await regenerarAlertas(db);
-      return json({ gravadas, removidas });
-    }
+    // FREQUÊNCIA
+    if (is('/frequencia', 'GET')) return json(await frequenciaHandler.consultarFrequencia(db, usuario, url.searchParams));
+    if (is('/frequencia', 'POST')) return json(await frequenciaHandler.registrarFrequencia(db, usuario, await request.json().catch(() => ({}))));
+    if (is('/frequencia/resumo', 'GET')) return json(await frequenciaHandler.resumoFrequencia(db, usuario, url.searchParams));
 
-    // ---------- ALERTAS ----------
-    if (path === '/alertas' && method === 'GET') {
-      const [alertas, alunos, turmas] = await Promise.all([
-        db.collection('alertas').find({}).sort({ data: -1 }).toArray(),
-        db.collection('alunos').find({}).toArray(),
-        db.collection('turmas').find({}).toArray(),
-      ]);
-      const alunoMap = Object.fromEntries(alunos.map((a) => [a.matricula, a]));
-      const turmaMap = Object.fromEntries(turmas.map((t) => [t.id, t.nome]));
-      const items = alertas.map((al) => {
-        const a = alunoMap[al.matricula_aluno];
-        return { ...al, _id: undefined, aluno_nome: a?.nome || '—', turma: turmaMap[a?.turma_id] || '—' };
-      });
-      return json({ items });
-    }
+    // DESEMPENHO / NOTAS
+    if (is('/disciplinas', 'GET')) return json(await desempenhoHandler.listarDisciplinas(db, usuario));
+    if (is('/notas', 'GET')) return json(await desempenhoHandler.listarNotas(db, usuario, url.searchParams));
+    if (is('/notas/batch', 'POST')) return json(await desempenhoHandler.salvarNotasEmLote(db, usuario, await request.json().catch(() => ({}))));
+    if (is('/desempenho/resumo', 'GET')) return json(await desempenhoHandler.resumoDesempenho(db, usuario, url.searchParams));
 
+    // ALERTAS
+    if (is('/alertas', 'GET')) return json(await alertasHandler.listarAlertas(db, usuario, url.searchParams));
+    if (is('/alertas', 'POST')) return json(await alertasHandler.criarAlertaManual(db, usuario, await request.json().catch(() => ({}))), 201);
+    if (is('/alertas/regenerar', 'POST')) return json(await alertasHandler.regenerarAlertas(db, usuario));
     if (path.startsWith('/alertas/') && method === 'PATCH' && parts.length === 2) {
-      const id = parseInt(parts[1]);
-      const body = await request.json();
-      const r = await db.collection('alertas').updateOne({ id }, { $set: { status: body.status || 'resolvido' } });
-      if (!r.matchedCount) return json({ error: 'Alerta não encontrado.' }, 404);
-      return json({ ok: true });
+      return json(await alertasHandler.atualizarAlerta(db, usuario, parts[1], await request.json().catch(() => ({}))));
     }
 
-    if (path === '/alertas/regenerar' && method === 'POST') {
-      const r = await regenerarAlertas(db);
+    // DOCUMENTOS
+    if (is('/documentos', 'GET')) return json(await documentosHandler.listarDocumentos(db, usuario, url.searchParams));
+    if (is('/documentos', 'POST')) return json(await documentosHandler.publicarDocumento(db, usuario, request), 201);
+    if (path.startsWith('/documentos/') && method === 'DELETE' && parts.length === 2) {
+      return json(await documentosHandler.excluirDocumento(db, usuario, parts[1]));
+    }
+    if (path.startsWith('/documentos/') && method === 'GET' && parts.length === 3 && parts[2] === 'download') {
+      const { doc, download } = await documentosHandler.baixarDocumento(db, usuario, parts[1]);
+      const webStream = require('stream').Readable.toWeb(download);
+      return new Response(webStream, {
+        headers: {
+          'Content-Type': doc.tipo_arquivo || 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="${encodeURIComponent(doc.nome_arquivo)}"`,
+        },
+      });
+    }
+
+    // COMUNICADOS
+    if (is('/comunicados', 'GET')) return json(await comunicadosHandler.listarComunicados(db, usuario, url.searchParams));
+    if (is('/comunicados', 'POST')) return json(await comunicadosHandler.criarComunicado(db, usuario, await request.json().catch(() => ({}))), 201);
+    if (path.startsWith('/comunicados/') && method === 'PATCH' && parts.length === 2) {
+      return json(await comunicadosHandler.atualizarComunicado(db, usuario, parts[1], await request.json().catch(() => ({}))));
+    }
+    if (path.startsWith('/comunicados/') && method === 'DELETE' && parts.length === 2) {
+      return json(await comunicadosHandler.excluirComunicado(db, usuario, parts[1]));
+    }
+    if (path.startsWith('/comunicados/') && method === 'POST' && parts.length === 3 && parts[2] === 'leitura') {
+      return json(await comunicadosHandler.marcarLeitura(db, usuario, parts[1]));
+    }
+
+    // RELATÓRIOS
+    if (path.startsWith('/relatorios/') && method === 'GET' && parts.length === 2) {
+      const tipo = parts[1];
+      const formato = url.searchParams.get('format');
+      const r = await relatoriosHandler.gerarRelatorio(db, usuario, tipo, url.searchParams, formato);
+      if (r.csv) {
+        return new Response(r.csv, {
+          headers: {
+            'Content-Type': 'text/csv; charset=utf-8',
+            'Content-Disposition': `attachment; filename="${r.nome}"`,
+          },
+        });
+      }
+      return json(r);
+    }
+    if (is('/relatorios', 'GET')) {
+      const tipo = url.searchParams.get('tipo') || 'indicadores';
+      const formato = url.searchParams.get('format');
+      const r = await relatoriosHandler.gerarRelatorio(db, usuario, tipo, url.searchParams, formato);
+      if (r.csv) {
+        return new Response(r.csv, {
+          headers: {
+            'Content-Type': 'text/csv; charset=utf-8',
+            'Content-Disposition': `attachment; filename="${r.nome}"`,
+          },
+        });
+      }
       return json(r);
     }
 
-    // ---------- NEXO IA ----------
-    if (path === '/nexo-ia/chat' && method === 'POST') {
-      if (!process.env.EMERGENT_LLM_KEY) {
-        return json({ error: 'EMERGENT_LLM_KEY não configurada.' }, 500);
-      }
-      const body = await request.json();
-      const message = typeof body.message === 'string' ? body.message.trim() : '';
-      if (!message) return json({ error: 'Mensagem obrigatória.' }, 400);
-      const sessionId = body.sessionId || `nexos-${Date.now()}`;
-      const history = Array.isArray(body.history)
-        ? body.history
-            .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-            .slice(-20).map((m) => ({ role: m.role, content: m.content.slice(0, 8000) }))
-        : [];
-      const streamMode = url.searchParams.get('stream') === 'true';
+    // CONFIGURAÇÕES
+    if (is('/configuracoes', 'GET')) return json(await configuracoesHandler.obterConfiguracoes(db, usuario));
+    if (is('/configuracoes', 'PATCH')) return json(await configuracoesHandler.atualizarConfiguracao(db, usuario, await request.json().catch(() => ({}))));
+    if (is('/perfil', 'PUT')) return json(await configuracoesHandler.atualizarPerfil(db, usuario, await request.json().catch(() => ({}))));
+    if (is('/perfil/senha', 'POST')) return json(await configuracoesHandler.alterarPropriaSenha(db, usuario, await request.json().catch(() => ({}))));
 
-      // snapshot escolar
-      const { byAluno, turmas } = await computeAlunoMetrics(db);
-      const alertas = await db.collection('alertas').find({ status: 'aberto' }).toArray();
-      const resumoAlunos = Object.values(byAluno).map(({ aluno, turma, media, freqPct }) => ({
-        matricula: aluno.matricula, nome: aluno.nome, turma: turma?.nome,
-        mediaGeral: media, frequenciaPct: freqPct,
-        alertas: alertas.filter((al) => al.matricula_aluno === aluno.matricula).map((al) => al.descricao),
-      }));
-
-      const systemPrompt = `Você é o "Nexo IA", assistente analítico do sistema Nexo's de gestão escolar.\n` +
-        `Fale sempre em português do Brasil. Seja claro, objetivo e empático.\n` +
-        `Use SOMENTE os dados fornecidos. Ao citar alunos, mencione nome e turma. Para riscos explique o motivo (freq<75%, média<6, alertas).\n` +
-        `Formate listas com marcadores. Seja conciso.\n\n` +
-        `DADOS DA ESCOLA (JSON):\n${JSON.stringify({ alunos: resumoAlunos, totalAlunos: resumoAlunos.length, totalTurmas: turmas.length, alertasAbertos: alertas.length }, null, 0)}`;
-
-      const chat = new LlmChat(process.env.EMERGENT_LLM_KEY, sessionId, systemPrompt, history)
-        .withModel('gemini', MODEL)
-        .withParams({ temperature: 0.3, max_tokens: 1500 });
-
-      const userMessage = new UserMessage({ text: message });
-
-      if (!streamMode) {
-        const reply = await chat.sendMessage(userMessage);
-        return json({ sessionId, model: MODEL, reply });
-      }
-
-      // ---------- STREAMING SSE ----------
-      const encoder = new TextEncoder();
-      const stream = new ReadableStream({
-        async start(controller) {
-          const send = (value) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
-          try {
-            send({ sessionId, model: MODEL });
-            let full = '';
-            for await (const event of chat.streamMessage(userMessage)) {
-              if (event?.type === 'text_delta' && typeof event.content === 'string') {
-                full += event.content;
-                send({ delta: event.content });
-              } else if (event?.type === 'stream_done') {
-                full = event.content || full;
-              }
-            }
-            send({ done: true, reply: full });
-            controller.close();
-          } catch (err) {
-            console.error('Gemini stream error:', err?.message);
-            send({ error: 'Falha ao gerar resposta.' });
-            controller.close();
-          }
-        },
-      });
-
-      return new Response(stream, {
-        headers: {
-          'Content-Type': 'text/event-stream; charset=utf-8',
-          'Cache-Control': 'no-cache, no-transform',
-          'X-Accel-Buffering': 'no',
-          Connection: 'keep-alive',
-        },
-      });
+    // NEXO IA
+    if (is('/nexo-ia/historico', 'GET')) return json(await nexoIaHandler.obterHistorico(db, usuario, url.searchParams));
+    if (is('/nexo-ia/conversas', 'POST')) return json(await nexoIaHandler.novaConversa(db, usuario), 201);
+    if (is('/nexo-ia/chat', 'POST')) {
+      return await nexoIaHandler.chat(db, request, usuario, await request.json().catch(() => ({})));
     }
 
     return json({ error: `Rota não encontrada: ${method} ${path}` }, 404);
   } catch (error) {
-    console.error('[API ERROR]', method, path, error);
-    return json({ error: error?.message || 'Erro interno.' }, 500);
+    if (error instanceof ApiError) {
+      return json({ error: error.message }, error.status);
+    }
+    console.error('[API ERROR]', method, path, error?.message || error);
+    return json({ error: 'Erro interno do servidor.' }, 500);
   }
 }
 

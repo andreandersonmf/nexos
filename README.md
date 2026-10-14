@@ -29,9 +29,10 @@ yarn dev
 ```
 
 **Credenciais de login (seed automático na primeira requisição):**
+- `admin@nexos.com` / `nexos123` — Admin
 - `ana@nexos.com` / `nexos123` — Coordenadora
 - `carlos@nexos.com` / `nexos123` — Professor
-- `admin@nexos.com` / `nexos123` — Admin
+- `julia@nexos.com` / `nexos123` — Professora
 
 ## Estrutura
 
@@ -89,4 +90,20 @@ components/
 
 - O seed roda **automaticamente** na primeira chamada da API (idempotente — só popula se a coleção `alunos` estiver vazia). Para resetar: `POST /api/seed/reset`.
 - A `EMERGENT_LLM_KEY` concentra o acesso a Gemini/OpenAI/Claude via proxy Emergent. Se o orçamento esgotar, substitua por outra chave Universal Key no `.env`.
-- Autenticação é mock (localStorage) — para produção, migrar para Supabase Auth ou JWT real.
+- **Autenticação por sessão real** (cookie `nexos_sessao` HttpOnly/SameSite=Lax, senhas com scrypt, rate limit de login, sessões revogáveis) com matriz de permissões de 4 perfis imposta no backend. Contas de ALUNO só podem ser criadas por ADMIN e nascem com senha temporária (primeiro acesso obrigatório).
+- Documentos são armazenados em **GridFS** (MongoDB), nunca em disco efêmero.
+
+## Testes
+
+```bash
+# Build de produção (necessário antes dos testes)
+yarn build
+
+# Suíte E2E completa — 100% local (MongoDB em memória, sem tocar em banco real)
+node scripts/e2e.mjs
+
+# Servidor local com banco em memória para exploração manual
+node scripts/servidor-local.mjs   # http://127.0.0.1:3111
+```
+
+Consulte `RELATORIO-FINAL.md` para o detalhamento das verificações, regras de segurança e pendências.

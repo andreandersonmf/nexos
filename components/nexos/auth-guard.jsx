@@ -2,25 +2,31 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAuth } from './auth-provider';
 
 export function AuthGuard({ children }) {
   const router = useRouter();
-  const [ready, setReady] = useState(false);
+  const { user, loading } = useAuth();
+  const [esperando, setEsperando] = useState(true);
 
   useEffect(() => {
-    try {
-      const u = localStorage.getItem('nexos_user');
-      if (!u) {
+    if (!loading) {
+      if (!user) {
         router.replace('/login');
-        return;
+      } else {
+        setEsperando(false);
       }
-      setReady(true);
-    } catch {
-      router.replace('/login');
     }
-  }, [router]);
+  }, [loading, user, router]);
 
-  if (!ready) {
+  // Força a troca da senha temporária antes de qualquer funcionalidade
+  useEffect(() => {
+    if (user?.senha_temporaria && !window.location.pathname.startsWith('/primeiro-acesso')) {
+      router.replace('/primeiro-acesso');
+    }
+  }, [user, router]);
+
+  if (loading || esperando || !user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 text-sm text-slate-500">
         Carregando…

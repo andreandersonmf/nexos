@@ -9,39 +9,31 @@ import { Label } from '@/components/ui/label';
 import { Logo } from '@/components/nexos/logo';
 import { Mail, Lock, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useAuth } from '@/components/nexos/auth-provider';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState('ana@nexos.com');
-  const [senha, setSenha] = useState('nexos123');
+  const { user, login } = useAuth();
+  const [email, setEmail] = useState('');
+  const [senha, setSenha] = useState('');
   const [showSenha, setShowSenha] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    try {
-      if (localStorage.getItem('nexos_user')) router.replace('/dashboard');
-    } catch {}
-  }, [router]);
+    if (user) {
+      router.replace(user.senha_temporaria ? '/primeiro-acesso' : '/dashboard');
+    }
+  }, [user, router]);
 
   const onSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     try {
-      const r = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, senha }),
-      });
-      const data = await r.json();
-      if (!r.ok) {
-        toast.error(data.error || 'Falha ao entrar.');
-        return;
-      }
-      localStorage.setItem('nexos_user', JSON.stringify(data.user));
-      toast.success(`Bem-vindo(a), ${data.user.nome.split(' ')[0]}!`);
-      router.replace('/dashboard');
+      const u = await login(email, senha);
+      toast.success(`Bem-vindo(a), ${u.nome.split(' ')[0]}!`);
+      router.replace(u.senha_temporaria ? '/primeiro-acesso' : '/dashboard');
     } catch (err) {
-      toast.error('Erro de conexão.');
+      toast.error(err.message || 'Falha ao entrar.');
     } finally {
       setLoading(false);
     }
@@ -65,7 +57,7 @@ export default function LoginPage() {
               <Mail className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <Input
                 id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
-                className="pl-9 h-11" placeholder="seu@email.com"
+                className="pl-9 h-11" placeholder="seu@email.com" autoComplete="email"
               />
             </div>
           </div>
@@ -76,7 +68,7 @@ export default function LoginPage() {
               <Input
                 id="senha" type={showSenha ? 'text' : 'password'} required value={senha}
                 onChange={(e) => setSenha(e.target.value)}
-                className="pl-9 pr-10 h-11" placeholder="••••••••"
+                className="pl-9 pr-10 h-11" placeholder="••••••••" autoComplete="current-password"
               />
               <button type="button" onClick={() => setShowSenha(!showSenha)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
@@ -89,18 +81,14 @@ export default function LoginPage() {
             {loading ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Entrando…</> : 'Entrar'}
           </Button>
           <div className="text-center">
-            <a href="#" className="text-xs text-indigo-600 hover:underline">Esqueceu sua senha?</a>
+            <span className="text-xs text-slate-400">Esqueceu sua senha? Procure a secretaria da escola.</span>
           </div>
         </form>
 
         <div className="mt-6 pt-6 border-t border-slate-100">
           <p className="text-xs text-center text-slate-400">
-            Não tem uma conta? Entre em contato com a escola.
+            Não tem uma conta? As contas de alunos são criadas pela administração da escola.
           </p>
-          <div className="mt-3 rounded-lg bg-slate-50 border border-slate-100 p-3 text-xs text-slate-500">
-            <div className="font-medium text-slate-600 mb-1">Demo:</div>
-            <div>ana@nexos.com / nexos123 (Coordenadora)</div>
-          </div>
         </div>
       </Card>
     </div>

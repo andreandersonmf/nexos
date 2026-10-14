@@ -1,18 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Input } from '@/components/ui/input';
 import { Search, Bell } from 'lucide-react';
+import { useAuth } from './auth-provider';
 
 export function Header({ title, subtitle, showSearch = true }) {
-  const [user, setUser] = useState(null);
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem('nexos_user');
-      if (raw) setUser(JSON.parse(raw));
-    } catch {}
-  }, []);
-
+  const { user } = useAuth();
   const nome = user?.nome?.split(' ')[0] || '';
   const defaultTitle = nome ? `Olá, ${nome}! 👋` : 'Olá!';
   const defaultSubtitle = 'Veja o que está acontecendo na escola hoje.';
@@ -37,10 +31,9 @@ export function Header({ title, subtitle, showSearch = true }) {
             />
           </div>
         )}
-        <button className="relative w-10 h-10 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-50">
+        <Link href="/alertas" className="relative w-10 h-10 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-50">
           <Bell className="w-4 h-4 text-slate-600" />
-          <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full" />
-        </button>
+        </Link>
       </div>
     </header>
   );

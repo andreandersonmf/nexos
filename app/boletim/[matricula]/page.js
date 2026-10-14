@@ -11,11 +11,27 @@ export default function BoletimPage() {
   const { matricula } = useParams();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState('');
 
   useEffect(() => {
-    fetch(`/api/alunos/${matricula}`).then((r) => r.json())
-      .then(setData).finally(() => setLoading(false));
+    fetch(`/api/alunos/${matricula}`).then(async (r) => {
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `Erro ${r.status}`);
+      setData(d);
+    }).catch((e) => setErro(e.message || 'Não foi possível carregar o boletim.'))
+      .finally(() => setLoading(false));
   }, [matricula]);
+
+  if (erro) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-red-600 text-sm mb-3">{erro}</div>
+          <div className="text-slate-400 text-xs">Faça login novamente e tente.</div>
+        </div>
+      </div>
+    );
+  }
 
   if (loading || !data?.aluno) {
     return (

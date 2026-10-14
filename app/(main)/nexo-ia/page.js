@@ -5,31 +5,86 @@ import { Header } from '@/components/nexos/header';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Sparkles, Send, Loader2, Brain, Users, AlertTriangle, TrendingUp } from 'lucide-react';
+import {
+  Sparkles, Send, Loader2, Brain, Users, AlertTriangle, TrendingUp,
+  Plus, MessageSquare, GraduationCap, BookOpen, CalendarCheck,
+} from 'lucide-react';
 import { toast } from 'sonner';
+import { useAuth } from '@/components/nexos/auth-provider';
+import { api } from '@/lib/client/api';
 
-const SUGGESTIONS = [
-  { icon: AlertTriangle, text: 'Quais alunos estão com maior risco de queda no desempenho?' },
-  { icon: Users,         text: 'Quais turmas têm mais faltas nas últimas 4 semanas?' },
-  { icon: TrendingUp,    text: 'Me mostre um resumo do desempenho da turma 7º A.' },
-  { icon: Brain,         text: 'Quais são os principais pontos de atenção dos alunos?' },
-];
+const SUGGESTIONS_POR_PERFIL = {
+  ALUNO: [
+    { icon: TrendingUp,    text: 'Como está minha média geral e em quais disciplinas posso melhorar?' },
+    { icon: CalendarCheck, text: 'Como está minha frequência nas aulas?' },
+    { icon: BookOpen,      text: 'Quais comunicados eu ainda não li?' },
+    { icon: Brain,         text: 'Você pode me explicar frações de um jeito simples?' },
+  ],
+  PROFESSOR: [
+    { icon: AlertTriangle, text: 'Quais alunos das minhas turmas estão com risco de queda no desempenho?' },
+    { icon: CalendarCheck, text: 'Como está a frequência das minhas turmas?' },
+    { icon: TrendingUp,    text: 'Qual a evolução recente do desempenho das minhas turmas?' },
+    { icon: Brain,         text: 'Quais são os principais pontos de atenção dos meus alunos?' },
+  ],
+  ADMIN: [
+    { icon: Users,         text: 'Me dê um resumo dos indicadores institucionais da escola.' },
+    { icon: AlertTriangle, text: 'Quais alunos estão em maior risco em toda a escola?' },
+    { icon: TrendingUp,    text: 'Compare o desempenho médio das turmas.' },
+    { icon: Brain,         text: 'Quais são os principais pontos de atenção da escola?' },
+  ],
+  COORDENADOR: [
+    { icon: Users,         text: 'Me dê um resumo dos indicadores institucionais da escola.' },
+    { icon: AlertTriangle, text: 'Quais alunos estão em maior risco em toda a escola?' },
+    { icon: TrendingUp,    text: 'Compare o desempenho médio das turmas.' },
+    { icon: Brain,         text: 'Quais são os principais pontos de atenção da escola?' },
+  ],
+};
 
 export default function NexoIAPage() {
+  const { user } = useAuth();
+  const perfil = user?.perfil || 'PROFESSOR';
+  const suggestions = SUGGESTIONS_POR_PERFIL[perfil] || SUGGESTIONS_POR_PERFIL.PROFESSOR;
+
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [streamingText, setStreamingText] = useState('');
-  const [sessionId, setSessionId] = useState(null);
-  const [userName, setUserName] = useState('');
+  const [conversaId, setConversaId] = useState(null);
+  const [conversas, setConversas] = useState([]);
+  const [carregandoHistorico, setCarregandoHistorico] = useState(true);
   const scrollRef = useRef(null);
 
-  useEffect(() => {
+  const carregarConversas = async () => {
     try {
-      const u = JSON.parse(localStorage.getItem('nexos_user') || 'null');
-      if (u) setUserName(u.nome.split(' ')[0]);
-    } catch {}
-  }, []);
+      const d = await api('/nexo-ia/historico');
+      setConversas(d.conversas || []);
+    } catch {
+      setConversas([]);
+    } finally {
+      setCarregandoHistorico(false);
+    }
+  };
+
+  useEffect(() => { carregarConversas(); }, []);
+
+  const abrirConversa = async (id) => {
+    if (loading) return;
+    try {
+      const d = await api(`/nexo-ia/historico?conversa_id=${id}`);
+      setConversaId(id);
+      setMessages(d.conversa?.mensagens || []);
+      setStreamingText('');
+    } catch (e) {
+      toast.error(e.message || 'Não foi possível abrir a conversa.');
+    }
+  };
+
+  const novaConversa = () => {
+    if (loading) return;
+    setConversaId(null);
+    setMessages([]);
+    setStreamingText('');
+  };
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -39,17 +94,16 @@ export default function NexoIAPage() {
     const message = (text ?? input).trim();
     if (!message || loading) return;
     setInput('');
-    const prevMsgs = messages;
-    const nextMsgs = [...prevMsgs, { role: 'user', content: message }];
+    const nextMsgs = [...messages, { role: 'user', content: message }];
     setMessages(nextMsgs);
     setLoading(true);
     setStreamingText('');
 
     try {
-      const r = await fetch('/api/nexo-ia/chat?stream=true', {
+      const r = await fetch('/api/nexo-ia/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, history: prevMsgs, sessionId }),
+        body: JSON.stringify({ message, conversaId }),
       });
       if (!r.ok) {
         const data = await r.json().catch(() => ({}));
@@ -62,7 +116,7 @@ export default function NexoIAPage() {
       let buffer = '';
       let accumulated = '';
       let finalReply = '';
-      let finalSession = sessionId;
+      let finalConversaId = conversaId;
 
       while (true) {
         const { value, done } = await reader.read();
@@ -76,7 +130,7 @@ export default function NexoIAPage() {
           try {
             const payload = JSON.parse(line.slice(6));
             if (payload.error) throw new Error(payload.error);
-            if (payload.sessionId) finalSession = payload.sessionId;
+            if (payload.conversaId) finalConversaId = payload.conversaId;
             if (payload.delta) {
               accumulated += payload.delta;
               setStreamingText(accumulated);
@@ -89,8 +143,9 @@ export default function NexoIAPage() {
           }
         }
       }
-      if (finalSession) setSessionId(finalSession);
+      if (finalConversaId) setConversaId(finalConversaId);
       setMessages([...nextMsgs, { role: 'assistant', content: finalReply || accumulated }]);
+      carregarConversas();
     } catch (e) {
       toast.error('Erro de conexão: ' + e.message);
       setMessages([...nextMsgs, { role: 'assistant', content: 'Desculpe, houve um erro de conexão.' }]);
@@ -101,13 +156,46 @@ export default function NexoIAPage() {
   };
 
   const empty = messages.length === 0 && !loading;
+  const nome = user?.nome?.split(' ')[0] || '';
 
   return (
     <div className="h-screen flex flex-col">
       <Header title="Nexo IA" subtitle="Análises inteligentes para um acompanhamento mais completo." showSearch={false} />
 
-      <div className="flex-1 min-h-0 px-8 pb-6">
-        <Card className="h-full border-slate-200 shadow-none flex flex-col overflow-hidden">
+      <div className="flex-1 min-h-0 px-8 pb-6 flex gap-4">
+        {/* Histórico de conversas */}
+        <Card className="w-60 shrink-0 border-slate-200 shadow-none hidden md:flex flex-col overflow-hidden">
+          <div className="p-3 border-b border-slate-100">
+            <Button variant="outline" size="sm" className="w-full justify-start text-indigo-700 border-indigo-200 hover:bg-indigo-50"
+              onClick={novaConversa}>
+              <Plus className="w-4 h-4 mr-1" /> Nova conversa
+            </Button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-2">
+            {carregandoHistorico && (
+              <div className="p-3 text-xs text-slate-400 flex items-center gap-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Carregando…
+              </div>
+            )}
+            {!carregandoHistorico && conversas.length === 0 && (
+              <div className="p-3 text-xs text-slate-400">Nenhuma conversa anterior.</div>
+            )}
+            {conversas.map((c) => (
+              <button key={c.id} onClick={() => abrirConversa(c.id)}
+                className={`w-full text-left p-2.5 rounded-lg text-xs transition-colors ${conversaId === c.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">{c.titulo}</span>
+                </div>
+                <div className="text-[10px] text-slate-400 mt-0.5 pl-5">
+                  {new Date(c.atualizado_em).toLocaleDateString('pt-BR')}
+                </div>
+              </button>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="flex-1 min-w-0 border-slate-200 shadow-none flex flex-col overflow-hidden">
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-6">
             {empty ? (
               <div className="max-w-2xl mx-auto">
@@ -116,13 +204,16 @@ export default function NexoIAPage() {
                     <Sparkles className="w-5 h-5 text-white" />
                   </div>
                   <div className="bg-slate-50 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-slate-800">
-                    <div className="font-medium mb-1">Olá, {userName || 'seja bem-vindo(a)'}! 👋</div>
-                    Sou a Nexo IA, sua assistente de dados escolares. Posso ajudar a identificar padrões,
-                    gerar insights e apoiar no acompanhamento dos seus alunos.
+                    <div className="font-medium mb-1">Olá, {nome || 'seja bem-vindo(a)'}!</div>
+                    {perfil === 'ALUNO'
+                      ? 'Sou a Nexo IA. Posso consultar suas notas e frequência, mostrar comunicados e também ajudar com dúvidas de estudo.'
+                      : perfil === 'PROFESSOR'
+                        ? 'Sou a Nexo IA. Posso analisar os dados das suas turmas — sempre de forma agregada — e ajudar no acompanhamento dos alunos.'
+                        : 'Sou a Nexo IA. Posso gerar indicadores institucionais, comparar turmas e identificar alunos em risco.'}
                   </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-6">
-                  {SUGGESTIONS.map((s) => {
+                  {suggestions.map((s) => {
                     const Icon = s.icon;
                     return (
                       <button key={s.text} onClick={() => send(s.text)} disabled={loading}
@@ -168,7 +259,7 @@ export default function NexoIAPage() {
                         </span>
                       ) : (
                         <span className="text-slate-500 flex items-center gap-2">
-                          <Loader2 className="w-4 h-4 animate-spin" /> Pensando…
+                          <Loader2 className="w-4 h-4 animate-spin" /> Consultando dados…
                         </span>
                       )}
                     </div>
@@ -194,7 +285,7 @@ export default function NexoIAPage() {
               </Button>
             </div>
             <div className="max-w-3xl mx-auto mt-2 text-[11px] text-slate-400 text-center">
-              Powered by Gemini 2.5 · Respostas em streaming · valide decisões críticas.
+              Powered by Gemini 2.5 · Respostas em streaming · {perfil === 'ALUNO' ? 'consultas restritas aos seus próprios dados' : 'consultas restritas ao seu escopo de acesso'}
             </div>
           </div>
         </Card>
