@@ -8,7 +8,7 @@ Sistema de gestão escolar com foco em acompanhamento de desempenho, frequência
 - **MongoDB** (via driver oficial `mongodb`)
 - **Tailwind CSS** + **shadcn/ui**
 - **Recharts** (gráficos)
-- **Gemini 2.5 Flash** via `emergentintegrations` (Emergent Universal LLM Key)
+- **Gemini 2.5 Flash** via API oficial do Google Gemini
 - `lucide-react` para ícones
 
 ## Rodando localmente
@@ -19,7 +19,7 @@ yarn install
 
 # 2. Configurar variáveis — copie .env.example para .env e preencha
 cp .env.example .env
-# edite .env e coloque sua EMERGENT_LLM_KEY
+# edite .env e coloque sua GEMINI_API_KEY
 
 # 3. Subir o MongoDB (local ou cloud) — ajuste MONGO_URL no .env
 
@@ -89,7 +89,7 @@ components/
 ## Observações
 
 - O seed roda **automaticamente** na primeira chamada da API (idempotente — só popula se a coleção `alunos` estiver vazia). Para resetar: `POST /api/seed/reset`.
-- A `EMERGENT_LLM_KEY` concentra o acesso a Gemini/OpenAI/Claude via proxy Emergent. Se o orçamento esgotar, substitua por outra chave Universal Key no `.env`.
+- A Nexo IA chama diretamente a API oficial do Google Gemini. Configure `GEMINI_API_KEY` com uma chave autorizada do Google AI Studio e `GEMINI_MODEL` com um modelo disponível para seu projeto. A chave fica somente no servidor e não deve ser exposta no frontend.
 - **Autenticação por sessão real** (cookie `nexos_sessao` HttpOnly/SameSite=Lax, senhas com scrypt, rate limit de login, sessões revogáveis) com matriz de permissões de 4 perfis imposta no backend. Contas de ALUNO só podem ser criadas por ADMIN e nascem com senha temporária (primeiro acesso obrigatório).
 - Documentos são armazenados em **GridFS** (MongoDB), nunca em disco efêmero.
 
