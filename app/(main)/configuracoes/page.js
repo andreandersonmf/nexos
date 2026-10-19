@@ -60,6 +60,7 @@ export default function ConfiguracoesPage() {
   // usuários
   const [usuarios, setUsuarios] = useState([]);
   const [turmas, setTurmas] = useState([]);
+  const [alunosDisponiveis, setAlunosDisponiveis] = useState([]);
   const [dialogUsuario, setDialogUsuario] = useState(false);
   const [formUsuario, setFormUsuario] = useState({ nome: '', email: '', perfil: 'PROFESSOR', cargo: '', matricula_aluno: '' });
   const [salvandoUsuario, setSalvandoUsuario] = useState(false);
@@ -85,11 +86,15 @@ export default function ConfiguracoesPage() {
         const u = await api('/usuarios');
         setUsuarios(u.items || []);
       }
-      if (user?.perfil !== 'ALUNO') {
+      if (!['ALUNO', 'RESPONSAVEL'].includes(user?.perfil)) {
         try {
           const t = await api('/turmas');
           setTurmas(t.items || []);
         } catch { setTurmas([]); }
+      }
+      if (user?.perfil === 'ADMIN') {
+        try { const a = await api('/alunos'); setAlunosDisponiveis(a.items || []); }
+        catch { setAlunosDisponiveis([]); }
       }
     } finally {
       setCarregando(false);
@@ -161,7 +166,7 @@ export default function ConfiguracoesPage() {
         email: formUsuario.email,
         perfil: formUsuario.perfil,
         cargo: formUsuario.cargo || null,
-        matricula_aluno: formUsuario.perfil === 'ALUNO' ? formUsuario.matricula_aluno : undefined,
+        matricula_aluno: ['ALUNO', 'RESPONSAVEL'].includes(formUsuario.perfil) ? formUsuario.matricula_aluno : undefined,
       };
       const d = await api('/usuarios', { method: 'POST', body });
       setCredencial({ email: formUsuario.email, senha: d.credencial_temporaria, aviso: d.aviso });
@@ -416,19 +421,26 @@ export default function ConfiguracoesPage() {
                     <SelectItem value="PROFESSOR">Professor</SelectItem>
                     {user?.perfil === 'ADMIN' && <SelectItem value="COORDENADOR">Coordenador</SelectItem>}
                     {user?.perfil === 'ADMIN' && <SelectItem value="ALUNO">Aluno</SelectItem>}
+                    {user?.perfil === 'ADMIN' && <SelectItem value="RESPONSAVEL">Responsável</SelectItem>}
                   </SelectContent>
                 </Select>
               </div>
-              {formUsuario.perfil !== 'ALUNO' && (
+              {!['ALUNO', 'RESPONSAVEL'].includes(formUsuario.perfil) && (
                 <div className="grid gap-2">
                   <Label htmlFor="usr-cargo">Cargo (opcional)</Label>
                   <Input id="usr-cargo" value={formUsuario.cargo} onChange={(e) => setFormUsuario({ ...formUsuario, cargo: e.target.value })} placeholder="Ex.: Professor de Matemática" />
                 </div>
               )}
-              {formUsuario.perfil === 'ALUNO' && (
+              {['ALUNO', 'RESPONSAVEL'].includes(formUsuario.perfil) && (
                 <div className="grid gap-2">
-                  <Label htmlFor="usr-matricula">Matrícula do aluno</Label>
-                  <Input id="usr-matricula" value={formUsuario.matricula_aluno} onChange={(e) => setFormUsuario({ ...formUsuario, matricula_aluno: e.target.value })} placeholder="Matrícula já cadastrada em Alunos" />
+                  <Label htmlFor="usr-matricula">Aluno vinculado</Label>
+                  <Select value={formUsuario.matricula_aluno} onValueChange={(v) => setFormUsuario({ ...formUsuario, matricula_aluno: v })}>
+                    <SelectTrigger className="w-full bg-white"><SelectValue placeholder="Selecione um aluno cadastrado" /></SelectTrigger>
+                    <SelectContent>
+                      {alunosDisponiveis.map((a) => <SelectItem key={a.matricula} value={a.matricula}>{a.nome} · {a.matricula}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  {formUsuario.perfil === 'RESPONSAVEL' && <p className="text-xs text-slate-500">O responsável poderá consultar somente o desenvolvimento deste aluno.</p>}
                 </div>
               )}
               {erro && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">{erro}</div>}
@@ -439,7 +451,7 @@ export default function ConfiguracoesPage() {
             {!credencial && (
               <Button className="bg-indigo-600 hover:bg-indigo-700" onClick={salvarUsuario}
                 disabled={salvandoUsuario || !formUsuario.nome.trim() || !formUsuario.email.trim() ||
-                  (formUsuario.perfil === 'ALUNO' && !formUsuario.matricula_aluno.trim())}>
+                  (['ALUNO', 'RESPONSAVEL'].includes(formUsuario.perfil) && !formUsuario.matricula_aluno.trim())}>
                 {salvandoUsuario && <Loader2 className="w-4 h-4 animate-spin mr-1" />} Criar conta
               </Button>
             )}

@@ -26,7 +26,7 @@ function freqColor(v) {
 export default function FrequenciaPage() {
   const { user } = useAuth();
   const ehEquipe = ['ADMIN', 'COORDENADOR', 'PROFESSOR'].includes(user?.perfil);
-  const ehAluno = user?.perfil === 'ALUNO';
+  const ehAluno = ['ALUNO', 'RESPONSAVEL'].includes(user?.perfil);
 
   const [turmas, setTurmas] = useState([]);
   const [turmaId, setTurmaId] = useState('');

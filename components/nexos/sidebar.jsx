@@ -31,7 +31,10 @@ export function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuth();
 
-  const menu = MENU_BASE.filter((item) => !item.perfis || item.perfis.includes(user?.perfil));
+  const menu = MENU_BASE.filter((item) => {
+    if (user?.perfil === 'RESPONSAVEL') return ['Início', 'Frequência', 'Desempenho', 'Documentos', 'Comunicados'].includes(item.label);
+    return !item.perfis || item.perfis.includes(user?.perfil);
+  });
 
   const isActive = (href) => {
     if (href === '/dashboard') return pathname === '/dashboard';
@@ -62,7 +65,7 @@ export function Sidebar() {
               </li>
             );
           })}
-          <li className="pt-2">
+          {user?.perfil !== 'RESPONSAVEL' && <li className="pt-2">
             <Link href="/nexo-ia"
               className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                 iaActive ? 'bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-sm'
@@ -71,7 +74,7 @@ export function Sidebar() {
               <Sparkles className="w-[18px] h-[18px]" strokeWidth={2} />
               <span>Nexo IA</span>
             </Link>
-          </li>
+          </li>}
         </ul>
       </nav>
       <div className="border-t border-slate-200 p-3">
@@ -91,9 +94,9 @@ export function Sidebar() {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" side="top" className="w-48">
-            <Link href="/configuracoes">
+            {user?.perfil !== 'RESPONSAVEL' && <Link href="/configuracoes">
               <DropdownMenuItem>Perfil e configurações</DropdownMenuItem>
-            </Link>
+            </Link>}
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={logout} className="text-red-600 focus:text-red-700">
               <LogOut className="w-4 h-4 mr-2" /> Sair

@@ -16,6 +16,7 @@ import {
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '@/components/ui/select';
+import { Label } from '@/components/ui/label';
 import {
   ArrowLeft, Users, CalendarCheck, TrendingUp, Bell, Loader2, Plus, X, GraduationCap,
 } from 'lucide-react';
@@ -91,12 +92,25 @@ export default function TurmaDetailPage() {
     }
   };
 
-  if (loading || !data?.turma) {
+  if (loading) {
     return (
       <div>
         <Header title=" " subtitle=" " showSearch={false} />
         <div className="px-8 flex items-center gap-2 text-slate-500 text-sm">
           <Loader2 className="w-4 h-4 animate-spin" /> Carregando turma…
+        </div>
+      </div>
+    );
+  }
+
+
+  if (!data?.turma) {
+    return (
+      <div>
+        <Header title="Turma" subtitle="Não foi possível abrir os detalhes desta turma." showSearch={false} />
+        <div className="px-8 py-6 space-y-4">
+          <div role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-4 py-3">{erro || 'Turma não encontrada ou sem permissão de acesso.'}</div>
+          <Button variant="outline" onClick={() => router.push('/turmas')}><ArrowLeft className="w-4 h-4 mr-2" /> Voltar para turmas</Button>
         </div>
       </div>
     );

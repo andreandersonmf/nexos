@@ -14,6 +14,14 @@ export function AuthGuard({ children }) {
       if (!user) {
         router.replace('/login');
       } else {
+        const caminho = window.location.pathname;
+        if (user.perfil === 'RESPONSAVEL') {
+          const permitidos = ['/dashboard', '/frequencia', '/desempenho', '/documentos', '/comunicados'];
+          if (!permitidos.some((p) => caminho === p || caminho.startsWith(`${p}/`))) {
+            router.replace('/dashboard');
+            return;
+          }
+        }
         setEsperando(false);
       }
     }

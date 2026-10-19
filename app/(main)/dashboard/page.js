@@ -84,10 +84,10 @@ export default function DashboardPage() {
   const m = data.metricas;
 
   // ============ DASHBOARD DO ALUNO ============
-  if (user?.perfil === 'ALUNO') {
+  if (['ALUNO', 'RESPONSAVEL'].includes(user?.perfil)) {
     return (
       <div>
-        <Header title={`Olá, ${user.nome.split(' ')[0]}!`} subtitle={`Turma ${data.turma || '—'} · acompanhe seu desempenho escolar.`} showSearch={false} />
+        <Header title={user?.perfil === 'RESPONSAVEL' ? `Acompanhamento de ${data.aluno || 'seu aluno'}` : `Olá, ${user.nome.split(' ')[0]}!`} subtitle={`Turma ${data.turma || '—'} · ${user?.perfil === 'RESPONSAVEL' ? 'acompanhe o desenvolvimento escolar.' : 'acompanhe seu desempenho escolar.'}`} showSearch={false} />
         <div className="px-8 pb-8 space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <MetricCard icon={TrendingUp} label="Média geral" value={fmt(m.mediaGeral)} iconColor="indigo" />

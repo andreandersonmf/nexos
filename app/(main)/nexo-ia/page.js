@@ -116,6 +116,7 @@ export default function NexoIAPage() {
       let buffer = '';
       let accumulated = '';
       let finalReply = '';
+      let streamError = '';
       let finalConversaId = conversaId;
 
       while (true) {
@@ -129,7 +130,7 @@ export default function NexoIAPage() {
           if (!line) continue;
           try {
             const payload = JSON.parse(line.slice(6));
-            if (payload.error) throw new Error(payload.error);
+            if (payload.error) { streamError = payload.error; continue; }
             if (payload.conversaId) finalConversaId = payload.conversaId;
             if (payload.delta) {
               accumulated += payload.delta;
@@ -144,7 +145,12 @@ export default function NexoIAPage() {
         }
       }
       if (finalConversaId) setConversaId(finalConversaId);
-      setMessages([...nextMsgs, { role: 'assistant', content: finalReply || accumulated }]);
+      if (streamError) {
+        toast.error(streamError);
+        setMessages([...nextMsgs, { role: 'assistant', content: `Desculpe, ocorreu um erro: ${streamError}` }]);
+      } else {
+        setMessages([...nextMsgs, { role: 'assistant', content: finalReply || accumulated || 'Não foi possível gerar uma resposta. Tente novamente.' }]);
+      }
       carregarConversas();
     } catch (e) {
       toast.error('Erro de conexão: ' + e.message);

@@ -23,7 +23,7 @@ import { api } from '@/lib/client/api';
 export default function ComunicadosPage() {
   const { user } = useAuth();
   const ehEquipe = ['ADMIN', 'COORDENADOR', 'PROFESSOR'].includes(user?.perfil);
-  const ehAluno = user?.perfil === 'ALUNO';
+  const ehAluno = ['ALUNO', 'RESPONSAVEL'].includes(user?.perfil);
 
   const [statusFiltro, setStatusFiltro] = useState('publicado');
   const [items, setItems] = useState([]);

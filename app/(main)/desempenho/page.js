@@ -278,7 +278,7 @@ function LancamentoNotas() {
 
 export default function DesempenhoPage() {
   const { user } = useAuth();
-  const ehAluno = user?.perfil === 'ALUNO';
+  const ehAluno = ['ALUNO', 'RESPONSAVEL'].includes(user?.perfil);
   return (
     <div>
       <Header title={ehAluno ? 'Meu desempenho' : 'Desempenho — Lançamento de Notas'}

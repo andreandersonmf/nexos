@@ -68,6 +68,24 @@ async function routeHandler(request, context) {
 
     const is = (p, m) => path === p && method === m;
 
+    if (usuario.perfil === 'RESPONSAVEL') {
+      const permitido =
+        (path === '/auth/logout' && method === 'POST') ||
+        (path === '/auth/me' && method === 'GET') ||
+        (path === '/perfil/senha' && method === 'POST') ||
+        (path === '/perfil' && method === 'PUT') ||
+        (path === '/dashboard' && method === 'GET') ||
+        (path === '/alunos' && method === 'GET') ||
+        (path.startsWith('/alunos/') && method === 'GET' && parts.length === 2) ||
+        (path === '/frequencia' && method === 'GET') ||
+        (path === '/frequencia/resumo' && method === 'GET') ||
+        (path === '/documentos' && method === 'GET') ||
+        (path.startsWith('/documentos/') && method === 'GET' && parts.length === 3 && parts[2] === 'download') ||
+        (path === '/comunicados' && method === 'GET') ||
+        (path.startsWith('/comunicados/') && method === 'POST' && parts.length === 3 && parts[2] === 'leitura');
+      if (!permitido) throw new ApiError(403, 'Seu perfil de responsável permite apenas consultar informações acadêmicas do aluno vinculado.');
+    }
+
     // AUTH
     if (is('/auth/logout', 'POST')) {
       const r = await authHandler.logout(db, request, usuario);
@@ -231,7 +249,7 @@ async function routeHandler(request, context) {
     if (error instanceof ApiError) {
       return json({ error: error.message }, error.status);
     }
-    console.error('[API ERROR]', method, path, error?.message || error);
+    console.error('[API ERROR]', method, path, error?.stack || error?.message || error);
     return json({ error: 'Erro interno do servidor.' }, 500);
   }
 }
