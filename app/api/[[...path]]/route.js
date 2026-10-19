@@ -243,6 +243,12 @@ async function routeHandler(request, context) {
     // NEXO IA
     if (is('/nexo-ia/historico', 'GET')) return json(await nexoIaHandler.obterHistorico(db, usuario, url.searchParams));
     if (is('/nexo-ia/conversas', 'POST')) return json(await nexoIaHandler.novaConversa(db, usuario), 201);
+    if (parts[0] === 'nexo-ia' && parts[1] === 'conversas' && parts.length === 3 && method === 'PATCH') {
+      return json(await nexoIaHandler.renomearConversa(db, usuario, parts[2], await request.json().catch(() => ({}))));
+    }
+    if (parts[0] === 'nexo-ia' && parts[1] === 'conversas' && parts.length === 3 && method === 'DELETE') {
+      return json(await nexoIaHandler.excluirConversa(db, usuario, parts[2]));
+    }
     if (is('/nexo-ia/chat', 'POST')) {
       return await nexoIaHandler.chat(db, request, usuario, await request.json().catch(() => ({})));
     }

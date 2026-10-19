@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Sparkles, Send, Loader2, Brain, Users, AlertTriangle, TrendingUp,
-  Plus, MessageSquare, GraduationCap, BookOpen, CalendarCheck,
+  Plus, MessageSquare, GraduationCap, BookOpen, CalendarCheck, Pencil, Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/components/nexos/auth-provider';
@@ -38,7 +38,75 @@ const SUGGESTIONS_POR_PERFIL = {
     { icon: TrendingUp,    text: 'Compare o desempenho médio das turmas.' },
     { icon: Brain,         text: 'Quais são os principais pontos de atenção da escola?' },
   ],
-};
+ };
+
+// Renderiza Markdown básico sem injetar HTML arbitrário na página.
+function renderInlineMarkdown(text, keyPrefix = 'md') {
+  const pattern = /(\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g;
+  const parts = String(text || '').split(pattern);
+  return parts.map((part, index) => {
+    const key = `${keyPrefix}-${index}`;
+    if ((part.startsWith('**') && part.endsWith('**')) || (part.startsWith('__') && part.endsWith('__'))) {
+      return <strong key={key}>{part.slice(2, -2)}</strong>;
+    }
+    if ((part.startsWith('*') && part.endsWith('*')) || (part.startsWith('_') && part.endsWith('_'))) {
+      return <em key={key}>{part.slice(1, -1)}</em>;
+    }
+    if (part.startsWith('`') && part.endsWith('`')) {
+      return <code key={key} className="rounded bg-slate-200/70 px-1 py-0.5 text-[0.9em] font-mono">{part.slice(1, -1)}</code>;
+    }
+    const link = part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
+    if (link) return <a key={key} href={link[2]} target="_blank" rel="noopener noreferrer" className="text-indigo-700 underline underline-offset-2">{link[1]}</a>;
+    return part;
+  });
+}
+
+function MarkdownMessage({ content }) {
+  const lines = String(content || '').replace(/\r/g, '').split('\n');
+  const blocks = [];
+  let paragraph = [];
+  let listItems = [];
+  let listType = null;
+  const flushParagraph = () => {
+    if (paragraph.length) {
+      blocks.push(<p key={`p-${blocks.length}`} className="my-2 first:mt-0 last:mb-0">{paragraph.map((line, i) => <span key={i}>{i > 0 && <br />}{renderInlineMarkdown(line, `p-${blocks.length}-${i}`)}</span>)}</p>);
+      paragraph = [];
+    }
+  };
+  const flushList = () => {
+    if (!listItems.length) return;
+    const Tag = listType === 'ol' ? 'ol' : 'ul';
+    blocks.push(<Tag key={`list-${blocks.length}`} className={`${listType === 'ol' ? 'list-decimal' : 'list-disc'} my-2 space-y-1 pl-5`}>{listItems.map((item, i) => <li key={i}>{renderInlineMarkdown(item, `li-${blocks.length}-${i}`)}</li>)}</Tag>);
+    listItems = [];
+    listType = null;
+  };
+  lines.forEach((line) => {
+    const heading = line.match(/^\s*(#{1,3})\s+(.+)$/);
+    const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
+    const numbered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (!line.trim()) { flushParagraph(); flushList(); return; }
+    if (heading) {
+      flushParagraph(); flushList();
+      const level = heading[1].length;
+      const cls = level === 1 ? 'mt-4 mb-2 text-lg font-bold first:mt-0' : level === 2 ? 'mt-3 mb-1.5 text-base font-bold' : 'mt-3 mb-1 text-sm font-semibold';
+      const Tag = `h${level}`;
+      blocks.push(<Tag key={`h-${blocks.length}`} className={cls}>{renderInlineMarkdown(heading[2], `h-${blocks.length}`)}</Tag>);
+      return;
+    }
+    if (bullet || numbered) {
+      flushParagraph();
+      const nextType = numbered ? 'ol' : 'ul';
+      if (listType && listType !== nextType) flushList();
+      listType = nextType;
+      listItems.push((bullet || numbered)[1]);
+      return;
+    }
+    flushList();
+    paragraph.push(line);
+  });
+  flushParagraph(); flushList();
+  return <div className="markdown-message break-words">{blocks}</div>;
+}
 
 export default function NexoIAPage() {
   const { user } = useAuth();
@@ -77,6 +145,34 @@ export default function NexoIAPage() {
     } catch (e) {
       toast.error(e.message || 'Não foi possível abrir a conversa.');
     }
+  };
+
+  const renomearConversa = async (conversa) => {
+    if (loading) return;
+    const titulo = window.prompt('Digite o novo nome da conversa:', conversa.titulo || 'Nova conversa');
+    if (titulo === null) return;
+    const nome = titulo.trim();
+    if (!nome) { toast.error('O nome da conversa não pode ficar vazio.'); return; }
+    try {
+      await api(`/nexo-ia/conversas/${conversa.id}`, { method: 'PATCH', body: { titulo: nome } });
+      setConversas((anteriores) => anteriores.map((item) => item.id === conversa.id ? { ...item, titulo: nome } : item));
+      toast.success('Conversa renomeada.');
+    } catch (e) { toast.error(e.message || 'Não foi possível renomear a conversa.'); }
+  };
+
+  const excluirConversa = async (conversa) => {
+    if (loading) return;
+    if (!window.confirm(`Excluir a conversa “${conversa.titulo || 'Nova conversa'}”? Essa ação não pode ser desfeita.`)) return;
+    try {
+      await api(`/nexo-ia/conversas/${conversa.id}`, { method: 'DELETE' });
+      setConversas((anteriores) => anteriores.filter((item) => item.id !== conversa.id));
+      if (conversaId === conversa.id) {
+        setConversaId(null);
+        setMessages([]);
+        setStreamingText('');
+      }
+      toast.success('Conversa excluída.');
+    } catch (e) { toast.error(e.message || 'Não foi possível excluir a conversa.'); }
   };
 
   const novaConversa = () => {
@@ -187,16 +283,28 @@ export default function NexoIAPage() {
               <div className="p-3 text-xs text-slate-400">Nenhuma conversa anterior.</div>
             )}
             {conversas.map((c) => (
-              <button key={c.id} onClick={() => abrirConversa(c.id)}
-                className={`w-full text-left p-2.5 rounded-lg text-xs transition-colors ${conversaId === c.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>
-                <div className="flex items-center gap-2">
-                  <MessageSquare className="w-3.5 h-3.5 shrink-0" />
-                  <span className="truncate">{c.titulo}</span>
+              <div key={c.id} className={`group mb-1 rounded-lg transition-colors ${conversaId === c.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>
+                <div className="flex items-start gap-1 p-2.5 pb-1">
+                  <button type="button" onClick={() => abrirConversa(c.id)}
+                    className="flex min-w-0 flex-1 items-start gap-2 text-left text-xs" title={c.titulo}>
+                    <MessageSquare className="mt-0.5 w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">{c.titulo || 'Nova conversa'}</span>
+                  </button>
+                  <div className="flex shrink-0 gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
+                    <button type="button" onClick={() => renomearConversa(c)} title="Renomear conversa" aria-label={`Renomear ${c.titulo}`}
+                      className="rounded p-1 text-slate-400 hover:bg-white hover:text-indigo-600">
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                    <button type="button" onClick={() => excluirConversa(c)} title="Excluir conversa" aria-label={`Excluir ${c.titulo}`}
+                      className="rounded p-1 text-slate-400 hover:bg-white hover:text-red-600">
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
                 </div>
-                <div className="text-[10px] text-slate-400 mt-0.5 pl-5">
+                <div className="pb-2 pl-8 text-[10px] text-slate-400">
                   {new Date(c.atualizado_em).toLocaleDateString('pt-BR')}
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         </Card>
@@ -249,7 +357,7 @@ export default function NexoIAPage() {
                         ? 'bg-indigo-600 text-white rounded-2xl rounded-tr-sm'
                         : 'bg-slate-50 text-slate-800 rounded-2xl rounded-tl-sm'
                     }`}>
-                      {m.content}
+                      {m.role === 'assistant' ? <MarkdownMessage content={m.content} /> : m.content}
                     </div>
                   </div>
                 ))}
@@ -260,8 +368,8 @@ export default function NexoIAPage() {
                     </div>
                     <div className="bg-slate-50 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-slate-800 min-h-[44px] flex items-center">
                       {streamingText ? (
-                        <span className="whitespace-pre-wrap leading-relaxed">
-                          {streamingText}<span className="inline-block w-1.5 h-4 bg-indigo-400 ml-0.5 align-middle animate-pulse" />
+                        <span className="leading-relaxed">
+                          <MarkdownMessage content={streamingText} /><span className="inline-block w-1.5 h-4 bg-indigo-400 ml-0.5 align-middle animate-pulse" />
                         </span>
                       ) : (
                         <span className="text-slate-500 flex items-center gap-2">
@@ -291,7 +399,7 @@ export default function NexoIAPage() {
               </Button>
             </div>
             <div className="max-w-3xl mx-auto mt-2 text-[11px] text-slate-400 text-center">
-              Powered by Gemini 2.5 · Respostas em streaming · {perfil === 'ALUNO' ? 'consultas restritas aos seus próprios dados' : 'consultas restritas ao seu escopo de acesso'}
+              Powered by Gemini · Respostas em streaming · {perfil === 'ALUNO' ? 'consultas restritas aos seus próprios dados' : 'consultas restritas ao seu escopo de acesso'}
             </div>
           </div>
         </Card>
