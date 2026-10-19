@@ -112,6 +112,9 @@ async function routeHandler(request, context) {
     if (path.startsWith('/usuarios/') && method === 'PATCH' && parts.length === 2) {
       return json(await usuariosHandler.atualizarUsuario(db, usuario, parts[1], await request.json().catch(() => ({}))));
     }
+    if (path.startsWith('/usuarios/') && method === 'DELETE' && parts.length === 2) {
+      return json(await usuariosHandler.excluirUsuario(db, usuario, parts[1]));
+    }
     if (path.startsWith('/usuarios/') && method === 'POST' && parts.length === 3 && parts[2] === 'redefinir-senha') {
       return json(await usuariosHandler.redefinirSenha(db, usuario, parts[1]));
     }

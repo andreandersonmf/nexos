@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
-  Settings, UserRound, Building2, GraduationCap, Users, Loader2, Plus, KeyRound, KeySquare,
+  Settings, UserRound, Building2, GraduationCap, Users, Loader2, Plus, KeyRound, KeySquare, Pencil, Trash2,
 } from 'lucide-react';
 import { useAuth } from '@/components/nexos/auth-provider';
 import { api } from '@/lib/client/api';
@@ -62,6 +62,7 @@ export default function ConfiguracoesPage() {
   const [turmas, setTurmas] = useState([]);
   const [alunosDisponiveis, setAlunosDisponiveis] = useState([]);
   const [dialogUsuario, setDialogUsuario] = useState(false);
+  const [usuarioEditando, setUsuarioEditando] = useState(null);
   const [formUsuario, setFormUsuario] = useState({ nome: '', email: '', perfil: 'PROFESSOR', cargo: '', matricula_aluno: '' });
   const [salvandoUsuario, setSalvandoUsuario] = useState(false);
   const [credencial, setCredencial] = useState(null); // {email, senha} exibida uma única vez
@@ -151,7 +152,22 @@ export default function ConfiguracoesPage() {
   };
 
   const abrirNovoUsuario = () => {
-    setFormUsuario({ nome: '', email: '', perfil: user?.perfil === 'COORDENADOR' ? 'PROFESSOR' : 'PROFESSOR', cargo: '', matricula_aluno: '' });
+    setUsuarioEditando(null);
+    setFormUsuario({ nome: '', email: '', perfil: 'PROFESSOR', cargo: '', matricula_aluno: '' });
+    setCredencial(null);
+    setErro('');
+    setDialogUsuario(true);
+  };
+
+  const abrirEditarUsuario = (u) => {
+    setUsuarioEditando(u);
+    setFormUsuario({
+      nome: u.nome || '',
+      email: u.email || '',
+      perfil: u.perfil || 'PROFESSOR',
+      cargo: u.cargo || '',
+      matricula_aluno: u.matricula_aluno || '',
+    });
     setCredencial(null);
     setErro('');
     setDialogUsuario(true);
@@ -160,19 +176,34 @@ export default function ConfiguracoesPage() {
   const salvarUsuario = async () => {
     setSalvandoUsuario(true);
     setErro('');
+    setMsg('');
     try {
-      const body = {
-        nome: formUsuario.nome,
-        email: formUsuario.email,
-        perfil: formUsuario.perfil,
-        cargo: formUsuario.cargo || null,
-        matricula_aluno: ['ALUNO', 'RESPONSAVEL'].includes(formUsuario.perfil) ? formUsuario.matricula_aluno : undefined,
-      };
-      const d = await api('/usuarios', { method: 'POST', body });
-      setCredencial({ email: formUsuario.email, senha: d.credencial_temporaria, aviso: d.aviso });
-      carregar();
+      if (usuarioEditando) {
+        const body = {
+          nome: formUsuario.nome,
+          email: formUsuario.email,
+          cargo: formUsuario.cargo || null,
+          ...( ['ALUNO', 'RESPONSAVEL'].includes(usuarioEditando.perfil)
+            ? { matricula_aluno: formUsuario.matricula_aluno } : {}),
+        };
+        await api(`/usuarios/${usuarioEditando.id}`, { method: 'PATCH', body });
+        setDialogUsuario(false);
+        setMsg('Conta atualizada com sucesso.');
+        await carregar();
+      } else {
+        const body = {
+          nome: formUsuario.nome,
+          email: formUsuario.email,
+          perfil: formUsuario.perfil,
+          cargo: formUsuario.cargo || null,
+          matricula_aluno: ['ALUNO', 'RESPONSAVEL'].includes(formUsuario.perfil) ? formUsuario.matricula_aluno : undefined,
+        };
+        const d = await api('/usuarios', { method: 'POST', body });
+        setCredencial({ email: formUsuario.email, senha: d.credencial_temporaria, aviso: d.aviso });
+        await carregar();
+      }
     } catch (e) {
-      setErro(e.message || 'Não foi possível criar a conta.');
+      setErro(e.message || (usuarioEditando ? 'Não foi possível atualizar a conta.' : 'Não foi possível criar a conta.'));
     } finally {
       setSalvandoUsuario(false);
     }
@@ -191,9 +222,23 @@ export default function ConfiguracoesPage() {
     if (!confirm(`Gerar nova senha temporária para ${u.nome}? As sessões ativas serão encerradas.`)) return;
     try {
       const d = await api(`/usuarios/${u.id}/redefinir-senha`, { method: 'POST' });
+      setUsuarioEditando(null);
       setCredencial({ email: u.email, senha: d.credencial_temporaria, aviso: 'Senha temporária gerada. Entregue por canal seguro; o usuário deverá alterá-la no primeiro acesso.' });
+      setErro('');
+      setDialogUsuario(true);
     } catch (e) {
       alert(e.message || 'Não foi possível redefinir a senha.');
+    }
+  };
+
+  const excluirUsuario = async (u) => {
+    if (!confirm(`Excluir a conta de ${u.nome} (${u.email})? Esta ação não apaga os dados escolares do aluno vinculado.`)) return;
+    try {
+      await api(`/usuarios/${u.id}`, { method: 'DELETE' });
+      setMsg(`A conta de ${u.nome} foi excluída.`);
+      await carregar();
+    } catch (e) {
+      alert(e.message || 'Não foi possível excluir a conta.');
     }
   };
 
@@ -367,11 +412,19 @@ export default function ConfiguracoesPage() {
                           </Badge>
                         </button>
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-right whitespace-nowrap">
+                        <Button variant="ghost" size="sm" onClick={() => abrirEditarUsuario(u)} title="Editar usuário" aria-label={`Editar ${u.nome}`}>
+                          <Pencil className="w-4 h-4 text-slate-500" />
+                        </Button>
                         {user?.perfil === 'ADMIN' && (
-                          <Button variant="ghost" size="sm" onClick={() => redefinirSenha(u)} title="Gerar nova senha temporária">
-                            <KeySquare className="w-4 h-4 text-slate-400" />
-                          </Button>
+                          <>
+                            <Button variant="ghost" size="sm" onClick={() => redefinirSenha(u)} title="Gerar nova senha temporária" aria-label={`Redefinir senha de ${u.nome}`}>
+                              <KeySquare className="w-4 h-4 text-indigo-600" />
+                            </Button>
+                            <Button variant="ghost" size="sm" onClick={() => excluirUsuario(u)} title="Excluir usuário" aria-label={`Excluir ${u.nome}`}>
+                              <Trash2 className="w-4 h-4 text-red-500" />
+                            </Button>
+                          </>
                         )}
                       </TableCell>
                     </TableRow>
@@ -386,11 +439,9 @@ export default function ConfiguracoesPage() {
       <Dialog open={dialogUsuario} onOpenChange={setDialogUsuario}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Nova conta de acesso</DialogTitle>
+            <DialogTitle>{credencial ? 'Credencial temporária' : usuarioEditando ? 'Editar conta de acesso' : 'Nova conta de acesso'}</DialogTitle>
             <DialogDescription>
-              {user?.perfil === 'ADMIN'
-                ? 'Contas de aluno exigem matrícula já cadastrada no sistema. Uma senha temporária será gerada; o usuário deverá alterá-la no primeiro acesso.'
-                : 'Você pode criar contas de professores. Uma senha temporária será gerada; o professor deverá alterá-la no primeiro acesso.'}
+              {credencial ? 'A senha abaixo é exibida apenas agora. Copie e entregue por um canal seguro.' : usuarioEditando ? 'Atualize os dados da conta. O perfil não pode ser alterado por esta tela.' : user?.perfil === 'ADMIN' ? 'Contas de aluno exigem matrícula já cadastrada no sistema. Uma senha temporária será gerada; o usuário deverá alterá-la no primeiro acesso.' : 'Você pode criar contas de professores. Uma senha temporária será gerada; o professor deverá alterá-la no primeiro acesso.'}
             </DialogDescription>
           </DialogHeader>
           {credencial ? (
@@ -413,7 +464,7 @@ export default function ConfiguracoesPage() {
                 <Label htmlFor="usr-email">E-mail</Label>
                 <Input id="usr-email" type="email" value={formUsuario.email} onChange={(e) => setFormUsuario({ ...formUsuario, email: e.target.value })} />
               </div>
-              <div className="grid gap-2">
+              {!usuarioEditando && <div className="grid gap-2">
                 <Label>Perfil</Label>
                 <Select value={formUsuario.perfil} onValueChange={(v) => setFormUsuario({ ...formUsuario, perfil: v })}>
                   <SelectTrigger className="w-full bg-white"><SelectValue placeholder="Perfil" /></SelectTrigger>
@@ -424,7 +475,7 @@ export default function ConfiguracoesPage() {
                     {user?.perfil === 'ADMIN' && <SelectItem value="RESPONSAVEL">Responsável</SelectItem>}
                   </SelectContent>
                 </Select>
-              </div>
+              </div>}
               {!['ALUNO', 'RESPONSAVEL'].includes(formUsuario.perfil) && (
                 <div className="grid gap-2">
                   <Label htmlFor="usr-cargo">Cargo (opcional)</Label>
@@ -452,7 +503,7 @@ export default function ConfiguracoesPage() {
               <Button className="bg-indigo-600 hover:bg-indigo-700" onClick={salvarUsuario}
                 disabled={salvandoUsuario || !formUsuario.nome.trim() || !formUsuario.email.trim() ||
                   (['ALUNO', 'RESPONSAVEL'].includes(formUsuario.perfil) && !formUsuario.matricula_aluno.trim())}>
-                {salvandoUsuario && <Loader2 className="w-4 h-4 animate-spin mr-1" />} Criar conta
+                {salvandoUsuario && <Loader2 className="w-4 h-4 animate-spin mr-1" />} {usuarioEditando ? 'Salvar alterações' : 'Criar conta'}
               </Button>
             )}
           </DialogFooter>
